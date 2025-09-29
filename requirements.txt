@@ -6,7 +6,7 @@ sqlalchemy==2.0.23
 alembic==1.12.1
 psycopg2-binary==2.9.9
 pydantic==2.5.0
-ortools==9.14.620
+ortools==9.13.4784
 pulp==2.7.0
 python-multipart==0.0.6
 websockets==12.0
