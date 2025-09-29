@@ -1,4 +1,5 @@
 # main.py
+
 # Final Backend for BharatRailNet Decision Support System with PostgreSQL Integration
 # Updated to modern FastAPI & SQLAlchemy 2.0 practices with WebSocket authentication
 
@@ -7,7 +8,6 @@ import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict
-
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,14 +16,13 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
-                        String, create_engine, func)
+                       String, create_engine, func)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 import os
 
 # --- Configuration & Environment Variables ---
 load_dotenv()
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_KEY = "a_very_secret_key_for_jwt"
 ALGORITHM = "HS256"
@@ -123,6 +122,7 @@ class StationResponse(BaseModel):
     name: str
     code: str
     kilometer_marker: float
+    
     class Config:
         from_attributes = True
 
@@ -130,6 +130,7 @@ class TrackSegmentResponse(BaseModel):
     name: str
     start_km: float
     end_km: float
+    
     class Config:
         from_attributes = True
 
@@ -143,6 +144,7 @@ class AuditLogResponse(BaseModel):
     action: str
     details: str
     recommendation_matched: bool
+    
     class Config:
         from_attributes = True
 
@@ -164,11 +166,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        if username is None: raise credentials_exception
+        if username is None: 
+            raise credentials_exception
     except JWTError:
         raise credentials_exception
+    
     user = db.query(UserDB).filter(UserDB.id == username).first()
-    if user is None: raise credentials_exception
+    if user is None: 
+        raise credentials_exception
     return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
 
 # WebSocket authentication function
@@ -195,7 +200,7 @@ async def get_current_user_websocket(token: str):
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Dict] = {}  # section_id -> {websocket, user}
-        
+    
     async def connect(self, websocket: WebSocket, section: str, user: User):
         await websocket.accept()
         self.active_connections[section] = {
@@ -203,13 +208,13 @@ class ConnectionManager:
             "user": user
         }
         print(f"User {user.name} connected to section {section}")
-        
+    
     def disconnect(self, section: str):
         if section in self.active_connections:
             user = self.active_connections[section]["user"]
             print(f"User {user.name} disconnected from section {section}")
             del self.active_connections[section]
-            
+    
     async def broadcast(self, message: dict, section: str):
         if section in self.active_connections:
             try:
@@ -234,7 +239,6 @@ async def periodic_train_updates():
                     print("No trains found in database for updates")
                 
                 updates_by_section = {}
-                
                 for train in trains_to_update:
                     # Simulate train movement
                     train.current_km += random.uniform(0.5, 2.0)
@@ -249,6 +253,7 @@ async def periodic_train_updates():
                         section_id = track.section_id
                         if section_id not in updates_by_section:
                             updates_by_section[section_id] = []
+                        
                         updates_by_section[section_id].append({
                             "id": train.train_id,
                             "location_km": train.current_km
@@ -270,7 +275,6 @@ async def periodic_train_updates():
                 db.rollback()
             finally:
                 db.close()
-                
         except Exception as e:
             print(f"Critical error in periodic_train_updates: {e}")
             await asyncio.sleep(10)  # Wait longer if there's a critical error
@@ -285,7 +289,20 @@ async def lifespan(app: FastAPI):
 
 # --- FastAPI App Initialization with Lifespan ---
 app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# FIXED: Proper CORS configuration for your Netlify frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://bharatrailnet.netlify.app",  # Your Netlify domain
+        "http://localhost:3000",               # Local development
+        "http://localhost:5173",               # Vite dev server
+        "http://localhost:8080",               # Alternative local ports
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # --- API Endpoints ---
 @app.post("/token", response_model=Token)
@@ -299,16 +316,16 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 @app.get("/api/user/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
-    
+
 @app.get("/api/dashboard/kpis")
 async def get_kpis(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    punctuality = 98.2 # Mocked
+    punctuality = 98.2  # Mocked
     avg_delay = db.query(func.avg(LiveTrainData.delay_minutes)).scalar() or 0
     return {
-        "punctuality": punctuality, 
+        "punctuality": punctuality,
         "average_delay": avg_delay,
-        "section_throughput": 22, 
-        "track_utilization": 78, # Mocked
+        "section_throughput": 22,
+        "track_utilization": 78,  # Mocked
     }
 
 @app.get("/api/dashboard/trains", response_model=List[LiveTrainResponse])
@@ -317,10 +334,10 @@ async def get_live_train_status(user: User = Depends(get_current_user), db: Sess
     trains = db.query(LiveTrainData).filter(LiveTrainData.track_segment_id.in_(section_tracks)).all()
     return [
         LiveTrainResponse(
-            id=train.train_info.id, 
-            name=train.train_info.name, 
+            id=train.train_info.id,
+            name=train.train_info.name,
             status=train.status,
-            location_km=train.current_km, 
+            location_km=train.current_km,
             delay_minutes=train.delay_minutes
         ) for train in trains
     ]
@@ -344,7 +361,6 @@ async def websocket_test(user: User = Depends(get_current_user)):
         "message": "Use this info to test WebSocket connection"
     }
 
-
 # --- Enhanced WebSocket endpoint with authentication ---
 @app.websocket("/ws/{section_id}")
 async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str = Query(None)):
@@ -352,19 +368,18 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
         return
-        
+    
     user = await get_current_user_websocket(token)
     if not user:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
         return
-        
+    
     # Verify user has access to this section
     if user.section != section_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Access denied to this section")
         return
     
     await manager.connect(websocket, section_id, user)
-    
     try:
         # Send initial connection confirmation
         await websocket.send_json({
