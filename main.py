@@ -153,7 +153,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    # Truncate password to 72 bytes to fix bcrypt limitation
+    truncated_password = plain_password[:72] if isinstance(plain_password, str) else plain_password
+    return pwd_context.verify(truncated_password, hashed_password)
+
 
 def create_access_token(data: dict):
     to_encode = data.copy()
