@@ -293,19 +293,7 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App Initialization with Lifespan ---
 app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
 
-# FIXED: Proper CORS configuration for your Netlify frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://bharatrailnet.netlify.app",  # Your Netlify domain
-        "http://localhost:3000",               # Local development
-        "http://localhost:5173",               # Vite dev server
-        "http://localhost:8080",               # Alternative local ports
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+
 
 # --- API Endpoints ---
 @app.post("/token", response_model=Token)
@@ -418,6 +406,20 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+# FIXED: Proper CORS configuration for your Netlify frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://bharatrailnet.netlify.app",  # Your Netlify domain
+        "http://localhost:3000",               # Local development
+        "http://localhost:5173",               # Vite dev server
+        "http://localhost:8080",               # Alternative local ports
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # --- Main execution ---
 if __name__ == "__main__":
