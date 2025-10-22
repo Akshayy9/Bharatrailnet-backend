@@ -1,6 +1,7 @@
 # main.py
 
 # Final Backend for BharatRailNet Decision Support System with PostgreSQL Integration
+
 # Updated to modern FastAPI & SQLAlchemy 2.0 practices with WebSocket authentication
 
 import asyncio
@@ -16,7 +17,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
-                       String, create_engine, func)
+String, create_engine, func)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 import os
@@ -107,7 +108,6 @@ class User(BaseModel):
     name: str
     section: str
     sectionName: str
-    
     class Config:
         from_attributes = True
 
@@ -122,7 +122,6 @@ class StationResponse(BaseModel):
     name: str
     code: str
     kilometer_marker: float
-    
     class Config:
         from_attributes = True
 
@@ -130,7 +129,6 @@ class TrackSegmentResponse(BaseModel):
     name: str
     start_km: float
     end_km: float
-    
     class Config:
         from_attributes = True
 
@@ -144,7 +142,6 @@ class AuditLogResponse(BaseModel):
     action: str
     details: str
     recommendation_matched: bool
-    
     class Config:
         from_attributes = True
 
@@ -157,7 +154,6 @@ def verify_password(plain_password, hashed_password):
     truncated_password = plain_password[:72] if isinstance(plain_password, str) else plain_password
     return pwd_context.verify(truncated_password, hashed_password)
 
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -169,13 +165,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        if username is None: 
+        if username is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
     
     user = db.query(UserDB).filter(UserDB.id == username).first()
-    if user is None: 
+    if user is None:
         raise credentials_exception
     return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
 
@@ -238,10 +234,12 @@ async def periodic_train_updates():
             db = SessionLocal()
             try:
                 trains_to_update = db.query(LiveTrainData).all()
+                
                 if not trains_to_update:
                     print("No trains found in database for updates")
                 
                 updates_by_section = {}
+                
                 for train in trains_to_update:
                     # Simulate train movement
                     train.current_km += random.uniform(0.5, 2.0)
@@ -269,7 +267,7 @@ async def periodic_train_updates():
                     await manager.broadcast({
                         "type": "train_position_update",
                         "data": updates,
-                        "timestamp": datetime.now().isoformat()  # Fixed deprecated datetime.utcnow()
+                        "timestamp": datetime.now().isoformat()
                     }, section_id)
                     print(f"Broadcasted {len(updates)} train updates to section {section_id}")
                     
@@ -293,7 +291,14 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App Initialization with Lifespan ---
 app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
 
-
+# CORS configuration - Allow all origins temporarily to fix the issue
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TEMPORARY: Allow all origins
+    allow_credentials=False,  # MUST be False when using "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- API Endpoints ---
 @app.post("/token", response_model=Token)
@@ -301,6 +306,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     user = db.query(UserDB).filter(UserDB.id == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+    
     access_token = create_access_token(data={"sub": user.id})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -371,6 +377,7 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
         return
     
     await manager.connect(websocket, section_id, user)
+    
     try:
         # Send initial connection confirmation
         await websocket.send_json({
@@ -406,20 +413,6 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
-
-# FIXED: Proper CORS configuration for your Netlify frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://bharatrailnet.netlify.app",  # Your Netlify domain
-        "http://localhost:3000",               # Local development
-        "http://localhost:5173",               # Vite dev server
-        "http://localhost:8080",               # Alternative local ports
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
 
 # --- Main execution ---
 if __name__ == "__main__":
