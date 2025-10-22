@@ -1,7 +1,6 @@
 # main.py
 
 # Final Backend for BharatRailNet Decision Support System with PostgreSQL Integration
-
 # Updated to modern FastAPI & SQLAlchemy 2.0 practices with WebSocket authentication
 
 import asyncio
@@ -25,14 +24,26 @@ import os
 # --- Configuration & Environment Variables ---
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    print("⚠️  WARNING: DATABASE_URL not set, using SQLite fallback")
+    DATABASE_URL = "sqlite:///./railway.db"
+
 SECRET_KEY = "a_very_secret_key_for_jwt"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # --- SQLAlchemy Database Setup ---
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+try:
+    engine = create_engine(DATABASE_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base = declarative_base()
+    print(f"✅ Database connected: {DATABASE_URL[:30]}...")
+except Exception as e:
+    print(f"❌ Database connection error: {e}")
+    DATABASE_URL = "sqlite:///./railway.db"
+    engine = create_engine(DATABASE_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base = declarative_base()
 
 def get_db():
     db = SessionLocal()
@@ -186,7 +197,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
 
-
 # WebSocket authentication function
 async def get_current_user_websocket(token: str):
     """Authenticate WebSocket connections using JWT token"""
@@ -204,6 +214,55 @@ async def get_current_user_websocket(token: str):
         if user is None:
             return None
         return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
+    finally:
+        db.close()
+
+# --- Database Initialization ---
+def reset_demo_user():
+    """Reset demo user with proper password hashing"""
+    db = SessionLocal()
+    try:
+        # Create tables if they don't exist
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created/verified")
+        
+        # Ensure section exists
+        section = db.query(Section).filter(Section.id == "GZB").first()
+        if not section:
+            section = Section(id="GZB", name="Ghaziabad")
+            db.add(section)
+            db.commit()
+            print("✅ Demo section created: GZB - Ghaziabad")
+        
+        # Delete existing demo user if exists
+        existing = db.query(UserDB).filter(UserDB.id == "SK001").first()
+        if existing:
+            db.delete(existing)
+            db.commit()
+            print("🗑️  Deleted old demo user")
+        
+        # Create new demo user with properly hashed password
+        demo_password = "demo123"
+        hashed = get_password_hash(demo_password)
+        
+        new_user = UserDB(
+            id="SK001",
+            name="Demo Controller",
+            hashed_password=hashed,
+            section_id="GZB",
+            section_name="Ghaziabad"
+        )
+        db.add(new_user)
+        db.commit()
+        print("✅ Demo user created successfully")
+        print("   Username: SK001")
+        print("   Password: demo123")
+        print("   Section: GZB (Ghaziabad)")
+        return True
+    except Exception as e:
+        print(f"❌ Error resetting demo user: {e}")
+        db.rollback()
+        return False
     finally:
         db.close()
 
@@ -232,7 +291,6 @@ class ConnectionManager:
                 await self.active_connections[section]["websocket"].send_json(message)
             except Exception as e:
                 print(f"Error broadcasting to section {section}: {e}")
-                # Remove the connection if it's no longer valid
                 self.disconnect(section)
 
 manager = ConnectionManager()
@@ -281,7 +339,6 @@ async def periodic_train_updates():
                         "data": updates,
                         "timestamp": datetime.now().isoformat()
                     }, section_id)
-                    print(f"Broadcasted {len(updates)} train updates to section {section_id}")
                     
             except Exception as e:
                 print(f"Error in periodic train updates: {e}")
@@ -290,14 +347,19 @@ async def periodic_train_updates():
                 db.close()
         except Exception as e:
             print(f"Critical error in periodic_train_updates: {e}")
-            await asyncio.sleep(10)  # Wait longer if there's a critical error
+            await asyncio.sleep(10)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the background task on application startup
+    # Initialize database and create demo user on startup
+    print("🚀 Starting BharatRailNet API...")
+    reset_demo_user()
+    
+    # Start the background task
     task = asyncio.create_task(periodic_train_updates())
     yield
     # Clean up resources on shutdown
+    print("🛑 Shutting down BharatRailNet API...")
     task.cancel()
 
 # --- FastAPI App Initialization with Lifespan ---
@@ -328,13 +390,13 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 
 @app.get("/api/dashboard/kpis")
 async def get_kpis(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    punctuality = 98.2  # Mocked
+    punctuality = 98.2
     avg_delay = db.query(func.avg(LiveTrainData.delay_minutes)).scalar() or 0
     return {
         "punctuality": punctuality,
         "average_delay": avg_delay,
         "section_throughput": 22,
-        "track_utilization": 78,  # Mocked
+        "track_utilization": 78,
     }
 
 @app.get("/api/dashboard/trains", response_model=List[LiveTrainResponse])
@@ -373,7 +435,6 @@ async def websocket_test(user: User = Depends(get_current_user)):
 # --- Enhanced WebSocket endpoint with authentication ---
 @app.websocket("/ws/{section_id}")
 async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str = Query(None)):
-    # Authenticate the user
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
         return
@@ -383,7 +444,6 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
         return
     
-    # Verify user has access to this section
     if user.section != section_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Access denied to this section")
         return
@@ -391,7 +451,6 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
     await manager.connect(websocket, section_id, user)
     
     try:
-        # Send initial connection confirmation
         await websocket.send_json({
             "type": "connection_established",
             "data": {
@@ -401,16 +460,12 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
             }
         })
         
-        # Keep the connection alive
         while True:
-            # Wait for any message from client (ping/pong or other data)
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                # Handle ping/pong or other client messages here if needed
                 if data == "ping":
                     await websocket.send_text("pong")
             except asyncio.TimeoutError:
-                # Send periodic ping to keep connection alive
                 await websocket.send_json({"type": "ping"})
             except Exception:
                 break
@@ -425,6 +480,15 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+@app.get("/")
+async def root():
+    return {
+        "message": "BharatRailNet API is running",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
 
 # --- Main execution ---
 if __name__ == "__main__":
