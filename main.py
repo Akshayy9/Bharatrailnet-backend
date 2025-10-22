@@ -158,7 +158,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def get_password_hash(password: str) -> str:
     """Simple SHA-256 password hashing - NO BCRYPT ISSUES"""
-    # Use SHA-256 with salt for simple hashing
     salt = "bharatrailnet_salt_key"
     return hashlib.sha256((password + salt).encode()).hexdigest()
 
@@ -210,7 +209,6 @@ def reset_demo_user():
     """Create demo user with simple password hashing"""
     db = SessionLocal()
     try:
-        # Drop and recreate users table
         try:
             UserDB.__table__.drop(engine)
             print("🗑️  Dropped users table")
@@ -220,7 +218,6 @@ def reset_demo_user():
         Base.metadata.create_all(bind=engine)
         print("✅ Database tables created")
         
-        # Create section
         section = db.query(Section).filter(Section.id == "GZB").first()
         if not section:
             section = Section(id="GZB", name="Ghaziabad")
@@ -228,7 +225,6 @@ def reset_demo_user():
             db.commit()
             print("✅ Section created: GZB")
         
-        # Create demo user
         hashed = get_password_hash("demo123")
         
         new_user = UserDB(
@@ -241,7 +237,6 @@ def reset_demo_user():
         db.add(new_user)
         db.commit()
         
-        # Test password
         test_works = verify_password("demo123", hashed)
         
         print("✅ Demo user created successfully")
@@ -369,6 +364,56 @@ async def get_section_map(section_id: str, user: User = Depends(get_current_user
     stations = db.query(Station).filter(Station.section_id == section_id).order_by(Station.kilometer_marker).all()
     tracks = db.query(TrackSegment).filter(TrackSegment.section_id == section_id).all()
     return {"stations": stations, "tracks": tracks}
+
+@app.get("/api/section_map/{section_id}/geo")
+async def get_section_map_geo(section_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get geographical data for railway section map with Leaflet"""
+    stations = db.query(Station).filter(Station.section_id == section_id).all()
+    
+    # Generate coordinates for stations
+    # In production, you'd have actual lat/lng in your database
+    stations_geo = []
+    base_lat = 28.6675  # Ghaziabad base coordinates
+    base_lng = 77.4199
+    
+    for i, station in enumerate(stations):
+        stations_geo.append({
+            "name": station.name,
+            "code": station.code,
+            "kilometer_marker": station.kilometer_marker,
+            "latitude": base_lat + (i * 0.05),  # Spread stations along route
+            "longitude": base_lng + (i * 0.05)
+        })
+    
+    # Get live trains
+    section_tracks = db.query(TrackSegment.id).filter(TrackSegment.section_id == section_id).subquery()
+    trains = db.query(LiveTrainData).filter(LiveTrainData.track_segment_id.in_(section_tracks)).all()
+    
+    trains_geo = []
+    for train in trains:
+        # Calculate approximate position based on current KM
+        train_index = int(train.current_km / 10) if train.current_km else 0
+        trains_geo.append({
+            "train_id": train.train_info.id,
+            "name": train.train_info.name,
+            "status": train.status,
+            "current_km": train.current_km,
+            "delay_minutes": train.delay_minutes,
+            "latitude": base_lat + (train_index * 0.05),
+            "longitude": base_lng + (train_index * 0.05)
+        })
+    
+    # Create routes connecting stations
+    routes = []
+    if len(stations_geo) > 1:
+        route_points = [{"lat": s["latitude"], "lng": s["longitude"]} for s in stations_geo]
+        routes.append({"points": route_points})
+    
+    return {
+        "stations": stations_geo,
+        "routes": routes,
+        "live_trains": trains_geo
+    }
 
 @app.get("/api/audit_trail", response_model=List[AuditLogResponse])
 async def get_audit_trail(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
