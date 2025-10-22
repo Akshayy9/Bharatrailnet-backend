@@ -219,17 +219,17 @@ async def get_current_user_websocket(token: str):
 
 # --- Database Initialization ---
 def reset_demo_user():
-    """Reset demo user with proper password hashing - FORCE RECREATE"""
+    """Reset demo user with proper password hashing"""
     db = SessionLocal()
     try:
-        # Drop and recreate users table to remove corrupted data
+        # Drop and recreate users table
         try:
             UserDB.__table__.drop(engine)
             print("🗑️  Dropped users table")
         except Exception:
             print("ℹ️  Users table didn't exist")
         
-        # Create all tables fresh
+        # Create all tables
         Base.metadata.create_all(bind=engine)
         print("✅ Database tables created/verified")
         
@@ -245,7 +245,6 @@ def reset_demo_user():
         demo_password = "demo123"
         hashed = get_password_hash(demo_password)
         
-        # Verify the hash was created correctly
         print(f"🔒 Password hash length: {len(hashed)}")
         
         new_user = UserDB(
@@ -258,7 +257,7 @@ def reset_demo_user():
         db.add(new_user)
         db.commit()
         
-        # Test the password immediately after creation
+        # Test the password
         test_user = db.query(UserDB).filter(UserDB.id == "SK001").first()
         if test_user:
             try:
@@ -283,12 +282,11 @@ def reset_demo_user():
     finally:
         db.close()
 
-
 # --- WebSocket Manager with Enhanced Connection Management ---
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, Dict] = {}  # section_id -> {websocket, user}
-    
+        self.active_connections: Dict[str, Dict] = {}
+
     async def connect(self, websocket: WebSocket, section: str, user: User):
         await websocket.accept()
         self.active_connections[section] = {
@@ -323,19 +321,13 @@ async def periodic_train_updates():
             try:
                 trains_to_update = db.query(LiveTrainData).all()
                 
-                if not trains_to_update:
-                    print("No trains found in database for updates")
-                
                 updates_by_section = {}
                 
                 for train in trains_to_update:
-                    # Simulate train movement
                     train.current_km += random.uniform(0.5, 2.0)
                     
-                    # Get track information
                     track = db.query(TrackSegment).filter(TrackSegment.id == train.track_segment_id).first()
                     if track:
-                        # Reset position if train reaches end of track
                         if train.current_km > track.end_km:
                             train.current_km = track.start_km
                         
@@ -350,7 +342,6 @@ async def periodic_train_updates():
                 
                 db.commit()
                 
-                # Broadcast updates to connected clients
                 for section_id, updates in updates_by_section.items():
                     await manager.broadcast({
                         "type": "train_position_update",
@@ -369,25 +360,22 @@ async def periodic_train_updates():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database and create demo user on startup
     print("🚀 Starting BharatRailNet API...")
     reset_demo_user()
     
-    # Start the background task
     task = asyncio.create_task(periodic_train_updates())
     yield
-    # Clean up resources on shutdown
     print("🛑 Shutting down BharatRailNet API...")
     task.cancel()
 
 # --- FastAPI App Initialization with Lifespan ---
 app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
 
-# CORS configuration - Allow all origins temporarily to fix the issue
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TEMPORARY: Allow all origins
-    allow_credentials=False,  # MUST be False when using "*"
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -450,6 +438,68 @@ async def websocket_test(user: User = Depends(get_current_user)):
         "message": "Use this info to test WebSocket connection"
     }
 
+# --- DEBUG ENDPOINT TO CREATE USER MANUALLY ---
+@app.get("/debug/create-user")
+async def create_user_endpoint():
+    """Debug endpoint to create demo user - REMOVE IN PRODUCTION"""
+    try:
+        db = SessionLocal()
+        
+        # Create tables first
+        Base.metadata.create_all(bind=engine)
+        
+        # Create section
+        section = db.query(Section).filter(Section.id == "GZB").first()
+        if not section:
+            section = Section(id="GZB", name="Ghaziabad")
+            db.add(section)
+            db.commit()
+        
+        # Delete existing user
+        existing = db.query(UserDB).filter(UserDB.id == "SK001").first()
+        if existing:
+            db.delete(existing)
+            db.commit()
+        
+        # Create new user with correct password
+        demo_password = "demo123"
+        password_bytes = demo_password.encode('utf-8')[:72]
+        truncated_password = password_bytes.decode('utf-8', errors='ignore')
+        hashed = pwd_context.hash(truncated_password)
+        
+        new_user = UserDB(
+            id="SK001",
+            name="Demo Controller",
+            hashed_password=hashed,
+            section_id="GZB",
+            section_name="Ghaziabad"
+        )
+        db.add(new_user)
+        db.commit()
+        
+        # Verify it works
+        test_user = db.query(UserDB).filter(UserDB.id == "SK001").first()
+        password_works = pwd_context.verify(truncated_password, test_user.hashed_password)
+        
+        db.close()
+        
+        return {
+            "success": True,
+            "message": "User created successfully",
+            "username": "SK001",
+            "password": "demo123",
+            "section": "GZB",
+            "password_test": "PASS" if password_works else "FAIL",
+            "hash_length": len(hashed)
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
 # --- Enhanced WebSocket endpoint with authentication ---
 @app.websocket("/ws/{section_id}")
 async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str = Query(None)):
@@ -505,7 +555,8 @@ async def root():
         "message": "BharatRailNet API is running",
         "version": "1.0.0",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "create_user": "/debug/create-user"
     }
 
 # --- Main execution ---
