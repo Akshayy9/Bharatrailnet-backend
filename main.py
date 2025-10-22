@@ -149,10 +149,21 @@ class AuditLogResponse(BaseModel):
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+def get_password_hash(password):
+    """Hash password with bcrypt, truncating to 72 bytes"""
+    if isinstance(password, str):
+        # Truncate to 72 BYTES (not characters) - bcrypt limitation
+        password_bytes = password.encode('utf-8')[:72]
+        password = password_bytes.decode('utf-8', errors='ignore')
+    return pwd_context.hash(password)
+
 def verify_password(plain_password, hashed_password):
-    # Truncate password to 72 bytes to fix bcrypt limitation
-    truncated_password = plain_password[:72] if isinstance(plain_password, str) else plain_password
-    return pwd_context.verify(truncated_password, hashed_password)
+    """Verify password, truncating to 72 bytes to fix bcrypt limitation"""
+    if isinstance(plain_password, str):
+        # Truncate to 72 BYTES (not characters) - bcrypt limitation
+        password_bytes = plain_password.encode('utf-8')[:72]
+        plain_password = password_bytes.decode('utf-8', errors='ignore')
+    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -174,6 +185,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     if user is None:
         raise credentials_exception
     return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
+
 
 # WebSocket authentication function
 async def get_current_user_websocket(token: str):
