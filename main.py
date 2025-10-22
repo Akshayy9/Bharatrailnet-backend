@@ -1,8 +1,5 @@
 # main.py
 
-# Final Backend for BharatRailNet Decision Support System with PostgreSQL Integration
-# Updated to modern FastAPI & SQLAlchemy 2.0 practices with WebSocket authentication
-
 import asyncio
 import random
 from contextlib import asynccontextmanager
@@ -13,13 +10,13 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
 String, create_engine, func)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 import os
+import hashlib
 
 # --- Configuration & Environment Variables ---
 load_dotenv()
@@ -109,7 +106,7 @@ class UserDB(Base):
     section_id = Column(String(10), ForeignKey("sections.id"))
     section_name = Column(String(100))
 
-# --- Pydantic Schemas (V2 compatible) ---
+# --- Pydantic Schemas ---
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -156,25 +153,18 @@ class AuditLogResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# --- Security & Authentication ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# --- SIMPLE PASSWORD HASHING (NO BCRYPT ISSUES) ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def get_password_hash(password):
-    """Hash password with bcrypt, truncating to 72 bytes"""
-    if isinstance(password, str):
-        # Truncate to 72 BYTES (not characters) - bcrypt limitation
-        password_bytes = password.encode('utf-8')[:72]
-        password = password_bytes.decode('utf-8', errors='ignore')
-    return pwd_context.hash(password)
+def get_password_hash(password: str) -> str:
+    """Simple SHA-256 password hashing - NO BCRYPT ISSUES"""
+    # Use SHA-256 with salt for simple hashing
+    salt = "bharatrailnet_salt_key"
+    return hashlib.sha256((password + salt).encode()).hexdigest()
 
-def verify_password(plain_password, hashed_password):
-    """Verify password, truncating to 72 bytes to fix bcrypt limitation"""
-    if isinstance(plain_password, str):
-        # Truncate to 72 BYTES (not characters) - bcrypt limitation
-        password_bytes = plain_password.encode('utf-8')[:72]
-        plain_password = password_bytes.decode('utf-8', errors='ignore')
-    return pwd_context.verify(plain_password, hashed_password)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password against hash"""
+    return get_password_hash(plain_password) == hashed_password
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -197,9 +187,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return User(id=user.id, name=user.name, section=user.section_id, sectionName=user.section_name)
 
-# WebSocket authentication function
 async def get_current_user_websocket(token: str):
-    """Authenticate WebSocket connections using JWT token"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -219,33 +207,29 @@ async def get_current_user_websocket(token: str):
 
 # --- Database Initialization ---
 def reset_demo_user():
-    """Reset demo user with proper password hashing"""
+    """Create demo user with simple password hashing"""
     db = SessionLocal()
     try:
         # Drop and recreate users table
         try:
             UserDB.__table__.drop(engine)
             print("🗑️  Dropped users table")
-        except Exception:
-            print("ℹ️  Users table didn't exist")
+        except:
+            pass
         
-        # Create all tables
         Base.metadata.create_all(bind=engine)
-        print("✅ Database tables created/verified")
+        print("✅ Database tables created")
         
-        # Ensure section exists
+        # Create section
         section = db.query(Section).filter(Section.id == "GZB").first()
         if not section:
             section = Section(id="GZB", name="Ghaziabad")
             db.add(section)
             db.commit()
-            print("✅ Demo section created: GZB - Ghaziabad")
+            print("✅ Section created: GZB")
         
-        # Create new demo user with properly hashed password
-        demo_password = "demo123"
-        hashed = get_password_hash(demo_password)
-        
-        print(f"🔒 Password hash length: {len(hashed)}")
+        # Create demo user
+        hashed = get_password_hash("demo123")
         
         new_user = UserDB(
             id="SK001",
@@ -257,24 +241,18 @@ def reset_demo_user():
         db.add(new_user)
         db.commit()
         
-        # Test the password
-        test_user = db.query(UserDB).filter(UserDB.id == "SK001").first()
-        if test_user:
-            try:
-                if verify_password("demo123", test_user.hashed_password):
-                    print("✅ Demo user created successfully")
-                    print("   Username: SK001")
-                    print("   Password: demo123")
-                    print("   Section: GZB (Ghaziabad)")
-                    print("✅ Password verification test PASSED")
-                else:
-                    print("❌ Password verification test FAILED")
-            except Exception as e:
-                print(f"❌ Password verification error: {e}")
+        # Test password
+        test_works = verify_password("demo123", hashed)
+        
+        print("✅ Demo user created successfully")
+        print("   Username: SK001")
+        print("   Password: demo123")
+        print("   Section: GZB")
+        print(f"   Password test: {'PASS' if test_works else 'FAIL'}")
         
         return True
     except Exception as e:
-        print(f"❌ Error resetting demo user: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
         db.rollback()
@@ -282,59 +260,47 @@ def reset_demo_user():
     finally:
         db.close()
 
-# --- WebSocket Manager with Enhanced Connection Management ---
+# --- WebSocket Manager ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Dict] = {}
 
     async def connect(self, websocket: WebSocket, section: str, user: User):
         await websocket.accept()
-        self.active_connections[section] = {
-            "websocket": websocket,
-            "user": user
-        }
-        print(f"User {user.name} connected to section {section}")
+        self.active_connections[section] = {"websocket": websocket, "user": user}
     
     def disconnect(self, section: str):
         if section in self.active_connections:
-            user = self.active_connections[section]["user"]
-            print(f"User {user.name} disconnected from section {section}")
             del self.active_connections[section]
     
     async def broadcast(self, message: dict, section: str):
         if section in self.active_connections:
             try:
                 await self.active_connections[section]["websocket"].send_json(message)
-            except Exception as e:
-                print(f"Error broadcasting to section {section}: {e}")
+            except:
                 self.disconnect(section)
 
 manager = ConnectionManager()
 
-# --- Background Task & Lifespan Management ---
+# --- Background Tasks ---
 async def periodic_train_updates():
-    """Enhanced periodic train updates with better error handling"""
     while True:
         try:
             await asyncio.sleep(5)
             db = SessionLocal()
             try:
                 trains_to_update = db.query(LiveTrainData).all()
-                
                 updates_by_section = {}
                 
                 for train in trains_to_update:
                     train.current_km += random.uniform(0.5, 2.0)
-                    
                     track = db.query(TrackSegment).filter(TrackSegment.id == train.track_segment_id).first()
                     if track:
                         if train.current_km > track.end_km:
                             train.current_km = track.start_km
-                        
                         section_id = track.section_id
                         if section_id not in updates_by_section:
                             updates_by_section[section_id] = []
-                        
                         updates_by_section[section_id].append({
                             "id": train.train_id,
                             "location_km": train.current_km
@@ -348,30 +314,23 @@ async def periodic_train_updates():
                         "data": updates,
                         "timestamp": datetime.now().isoformat()
                     }, section_id)
-                    
-            except Exception as e:
-                print(f"Error in periodic train updates: {e}")
-                db.rollback()
             finally:
                 db.close()
-        except Exception as e:
-            print(f"Critical error in periodic_train_updates: {e}")
+        except:
             await asyncio.sleep(10)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Starting BharatRailNet API...")
     reset_demo_user()
-    
     task = asyncio.create_task(periodic_train_updates())
     yield
-    print("🛑 Shutting down BharatRailNet API...")
+    print("🛑 Shutting down...")
     task.cancel()
 
-# --- FastAPI App Initialization with Lifespan ---
+# --- FastAPI App ---
 app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
 
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -396,28 +355,14 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 
 @app.get("/api/dashboard/kpis")
 async def get_kpis(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    punctuality = 98.2
     avg_delay = db.query(func.avg(LiveTrainData.delay_minutes)).scalar() or 0
-    return {
-        "punctuality": punctuality,
-        "average_delay": avg_delay,
-        "section_throughput": 22,
-        "track_utilization": 78,
-    }
+    return {"punctuality": 98.2, "average_delay": avg_delay, "section_throughput": 22, "track_utilization": 78}
 
 @app.get("/api/dashboard/trains", response_model=List[LiveTrainResponse])
 async def get_live_train_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     section_tracks = db.query(TrackSegment.id).filter(TrackSegment.section_id == user.section).subquery()
     trains = db.query(LiveTrainData).filter(LiveTrainData.track_segment_id.in_(section_tracks)).all()
-    return [
-        LiveTrainResponse(
-            id=train.train_info.id,
-            name=train.train_info.name,
-            status=train.status,
-            location_km=train.current_km,
-            delay_minutes=train.delay_minutes
-        ) for train in trains
-    ]
+    return [LiveTrainResponse(id=train.train_info.id, name=train.train_info.name, status=train.status, location_km=train.current_km, delay_minutes=train.delay_minutes) for train in trains]
 
 @app.get("/api/section_map/{section_id}", response_model=SectionMapResponse)
 async def get_section_map(section_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -430,104 +375,21 @@ async def get_audit_trail(user: User = Depends(get_current_user), db: Session = 
     logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(50).all()
     return logs
 
-@app.get("/debug/websocket-test")
-async def websocket_test(user: User = Depends(get_current_user)):
-    return {
-        "user": user,
-        "websocket_url": f"ws://localhost:8000/ws/{user.section}",
-        "message": "Use this info to test WebSocket connection"
-    }
-
-# --- DEBUG ENDPOINT TO CREATE USER MANUALLY ---
-@app.get("/debug/create-user")
-async def create_user_endpoint():
-    """Debug endpoint to create demo user - REMOVE IN PRODUCTION"""
-    try:
-        db = SessionLocal()
-        
-        # Create tables first
-        Base.metadata.create_all(bind=engine)
-        
-        # Create section
-        section = db.query(Section).filter(Section.id == "GZB").first()
-        if not section:
-            section = Section(id="GZB", name="Ghaziabad")
-            db.add(section)
-            db.commit()
-        
-        # Delete existing user
-        existing = db.query(UserDB).filter(UserDB.id == "SK001").first()
-        if existing:
-            db.delete(existing)
-            db.commit()
-        
-        # Create new user with correct password
-        demo_password = "demo123"
-        password_bytes = demo_password.encode('utf-8')[:72]
-        truncated_password = password_bytes.decode('utf-8', errors='ignore')
-        hashed = pwd_context.hash(truncated_password)
-        
-        new_user = UserDB(
-            id="SK001",
-            name="Demo Controller",
-            hashed_password=hashed,
-            section_id="GZB",
-            section_name="Ghaziabad"
-        )
-        db.add(new_user)
-        db.commit()
-        
-        # Verify it works
-        test_user = db.query(UserDB).filter(UserDB.id == "SK001").first()
-        password_works = pwd_context.verify(truncated_password, test_user.hashed_password)
-        
-        db.close()
-        
-        return {
-            "success": True,
-            "message": "User created successfully",
-            "username": "SK001",
-            "password": "demo123",
-            "section": "GZB",
-            "password_test": "PASS" if password_works else "FAIL",
-            "hash_length": len(hashed)
-        }
-    except Exception as e:
-        import traceback
-        return {
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
-
-# --- Enhanced WebSocket endpoint with authentication ---
 @app.websocket("/ws/{section_id}")
 async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str = Query(None)):
     if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     
     user = await get_current_user_websocket(token)
-    if not user:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
-        return
-    
-    if user.section != section_id:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Access denied to this section")
+    if not user or user.section != section_id:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     
     await manager.connect(websocket, section_id, user)
     
     try:
-        await websocket.send_json({
-            "type": "connection_established",
-            "data": {
-                "section": section_id,
-                "user": user.name,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        })
-        
+        await websocket.send_json({"type": "connection_established", "data": {"section": section_id, "user": user.name}})
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
@@ -535,31 +397,19 @@ async def websocket_endpoint(websocket: WebSocket, section_id: str, token: str =
                     await websocket.send_text("pong")
             except asyncio.TimeoutError:
                 await websocket.send_json({"type": "ping"})
-            except Exception:
+            except:
                 break
-                
-    except WebSocketDisconnect:
-        manager.disconnect(section_id)
-    except Exception as e:
-        print(f"WebSocket error for section {section_id}: {e}")
+    except:
         manager.disconnect(section_id)
 
-# --- Health Check Endpoint ---
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy"}
 
 @app.get("/")
 async def root():
-    return {
-        "message": "BharatRailNet API is running",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health",
-        "create_user": "/debug/create-user"
-    }
+    return {"message": "BharatRailNet API", "version": "1.0.0"}
 
-# --- Main execution ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
