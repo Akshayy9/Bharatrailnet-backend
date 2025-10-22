@@ -219,10 +219,17 @@ async def get_current_user_websocket(token: str):
 
 # --- Database Initialization ---
 def reset_demo_user():
-    """Reset demo user with proper password hashing"""
+    """Reset demo user with proper password hashing - FORCE RECREATE"""
     db = SessionLocal()
     try:
-        # Create tables if they don't exist
+        # Drop and recreate users table to remove corrupted data
+        try:
+            UserDB.__table__.drop(engine)
+            print("🗑️  Dropped users table")
+        except Exception:
+            print("ℹ️  Users table didn't exist")
+        
+        # Create all tables fresh
         Base.metadata.create_all(bind=engine)
         print("✅ Database tables created/verified")
         
@@ -234,16 +241,12 @@ def reset_demo_user():
             db.commit()
             print("✅ Demo section created: GZB - Ghaziabad")
         
-        # Delete existing demo user if exists
-        existing = db.query(UserDB).filter(UserDB.id == "SK001").first()
-        if existing:
-            db.delete(existing)
-            db.commit()
-            print("🗑️  Deleted old demo user")
-        
         # Create new demo user with properly hashed password
         demo_password = "demo123"
         hashed = get_password_hash(demo_password)
+        
+        # Verify the hash was created correctly
+        print(f"🔒 Password hash length: {len(hashed)}")
         
         new_user = UserDB(
             id="SK001",
@@ -254,17 +257,32 @@ def reset_demo_user():
         )
         db.add(new_user)
         db.commit()
-        print("✅ Demo user created successfully")
-        print("   Username: SK001")
-        print("   Password: demo123")
-        print("   Section: GZB (Ghaziabad)")
+        
+        # Test the password immediately after creation
+        test_user = db.query(UserDB).filter(UserDB.id == "SK001").first()
+        if test_user:
+            try:
+                if verify_password("demo123", test_user.hashed_password):
+                    print("✅ Demo user created successfully")
+                    print("   Username: SK001")
+                    print("   Password: demo123")
+                    print("   Section: GZB (Ghaziabad)")
+                    print("✅ Password verification test PASSED")
+                else:
+                    print("❌ Password verification test FAILED")
+            except Exception as e:
+                print(f"❌ Password verification error: {e}")
+        
         return True
     except Exception as e:
         print(f"❌ Error resetting demo user: {e}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
         return False
     finally:
         db.close()
+
 
 # --- WebSocket Manager with Enhanced Connection Management ---
 class ConnectionManager:
