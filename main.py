@@ -325,16 +325,10 @@ async def lifespan(app: FastAPI):
 
 # --- FastAPI App ---
 
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-
-app = FastAPI(title="BharatRailNet API", version="2.0.0", lifespan=lifespan)
-
-# single, strict CORS config
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://bharatrailnet.netlify.app"],
-    allow_credentials=True,                 # you use Authorization on /token
+    allow_origins=["https://bharatrailnet.netlify.app"],  # your exact origin
+    allow_credentials=True,                               # if using Authorization/cookies
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
@@ -342,7 +336,6 @@ app.add_middleware(
 @app.options("/{rest_of_path:path}")
 async def preflight(rest_of_path: str):
     return Response(status_code=204)
-
 
 
 
