@@ -30,17 +30,30 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # --- SQLAlchemy Database Setup ---
+from sqlalchemy.exc import OperationalError
+
 try:
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(
+        DATABASE_URL,          # Render Postgres URL (TLS enforced)
+        pool_pre_ping=True,    # verifies connection before checkout
+        pool_recycle=300,      # recycle connections every 5 minutes
+        pool_size=5,           # adjust to your plan
+        max_overflow=5
+    )
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base = declarative_base()
     print(f"✅ Database connected: {DATABASE_URL[:30]}...")
 except Exception as e:
     print(f"❌ Database connection error: {e}")
     DATABASE_URL = "sqlite:///./railway.db"
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
