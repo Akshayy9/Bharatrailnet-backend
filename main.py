@@ -324,19 +324,17 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 # --- FastAPI App ---
+# --- FastAPI App ---
+app = FastAPI(title="BharatRailNet API", version="1.0.0", lifespan=lifespan)
 
+# CORS: allow your deployed frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://bharatrailnet.netlify.app"],  # your exact origin
-    allow_credentials=True,                               # if using Authorization/cookies
+    allow_origins=["https://bharatrailnet.netlify.app"],
+    allow_credentials=True,            # set True if you send Authorization
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-@app.options("/{rest_of_path:path}")
-async def preflight(rest_of_path: str):
-    return Response(status_code=204)
-
 
 
 # --- API Endpoints ---
